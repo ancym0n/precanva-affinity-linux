@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Affinity Photo 2
+Comment=Affinity Photo 2 (pre-Canva lifetime license)
+Exec=@HOME@/.local/bin/affinity-photo-2 %F
+Path=@PREFIX@
+Icon=@HOME@/.local/share/icons/AffinityPhoto.svg
+Terminal=false
+Type=Application
+Categories=Graphics;2DGraphics;RasterGraphics;Photography;
+StartupNotify=true
+StartupWMClass=photo.exe
+MimeType=application/afphoto;x-scheme-handler/affinity-photo2-auth;x-scheme-handler/affinity-photo2-dropbox-auth;
