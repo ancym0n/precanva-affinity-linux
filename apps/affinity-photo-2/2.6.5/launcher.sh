@@ -2,9 +2,10 @@
 set -euo pipefail
 
 PREFIX="${AFFINITY_PHOTO2_PREFIX:-$HOME/.AffinityPhoto2}"
+WINE_USER="${USER:-$(id -un)}"
 WINE_BIN="$PREFIX/ElementalWarriorWine/bin"
 APP_EXE="$PREFIX/drive_c/Program Files/Affinity/Photo 2/Photo.exe"
-WIN_XML="$PREFIX/drive_c/users/${USER}/AppData/Roaming/Affinity/Photo/2.0/Settings/Window.xml"
+WIN_XML="$PREFIX/drive_c/users/${WINE_USER}/AppData/Roaming/Affinity/Photo/2.0/Settings/Window.xml"
 
 export WINEPREFIX="$PREFIX"
 export WINE="$WINE_BIN/wine"
@@ -79,50 +80,66 @@ else
 fi
 
 FRESH_LAUNCH=1
-if command -v hyprctl >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
-    # Apply runtime Hyprland window rules for color accuracy (100% opaque, no blur)
-    # and stable dropdown menus (no animations, no follow_mouse focus jumps).
-    hyprctl eval 'hl.window_rule({ name = "affinity-photo-2-runtime", enabled = true, match = { class = "^photo\\.exe$" }, opaque = true, opacity = "1.0 override 1.0 override 1.0 override", no_blur = true, no_shadow = true, no_anim = true, no_follow_mouse = true }); hl.exec_scheduled_prop_refresh_immediately()' >/dev/null 2>&1 || true
-
-    # Clean up stale windowless Photo.exe processes left behind after closing the window.
-    STALE_PIDS="$(pgrep -f 'Affinity/Photo 2/Phot[o]\.exe' 2>/dev/null || true)"
-    if [ -n "$STALE_PIDS" ]; then
-        MAPPED_COUNT="$(hyprctl clients -j 2>/dev/null | jq '[.[] | select((.class | test("^photo\\.exe$"; "i")) and .mapped == true)] | length' 2>/dev/null || echo 1)"
-        if [ "$MAPPED_COUNT" = "0" ]; then
-            ALL_OLD=1
-            for pid in $STALE_PIDS; do
-                ETIMES="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ' || echo 0)"
-                if [ "${ETIMES:-0}" -lt 15 ]; then
-                    ALL_OLD=0
-                fi
-            done
-            if [ "$ALL_OLD" = "1" ]; then
-                for pid in $STALE_PIDS; do
-                    kill "$pid" 2>/dev/null || true
-                done
-                sleep 1
-                for pid in $STALE_PIDS; do
-                    kill -9 "$pid" 2>/dev/null || true
-                done
-                "$WINESERVER" -k 2>/dev/null || true
-                sleep 1
-            fi
-        else
-            FRESH_LAUNCH=0
-        fi
+HYPR_EVAL_OK=0
+HYPR_RULES_LUA='hl.window_rule({ name = "affinity-photo-2-runtime", enabled = true, match = { class = "(?i)^photo\\.exe$" }, opaque = true, opacity = "1.0 override 1.0 override 1.0 override", no_blur = true, no_shadow = true, no_anim = true, no_follow_mouse = true }); hl.window_rule({ name = "affinity-photo-2-portal-runtime", enabled = true, match = { class = "(?i)^xdg-desktop-portal-gtk$", title = ".*\\(Photo\\)$" }, float = true, center = true, no_anim = true }); hl.exec_scheduled_prop_refresh_immediately()'
+if [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v hyprctl >/dev/null 2>&1; then
+    # Apply runtime Hyprland window rules for color accuracy (100% opaque, no blur),
+    # stable dropdown menus (no animations, no follow_mouse focus jumps), and centered file portals.
+    if hyprctl eval "$HYPR_RULES_LUA" >/dev/null 2>&1; then
+        HYPR_EVAL_OK=1
     fi
 
-    # Prevent Hyprland tiling viewport clipping on startup:
-    # If Window.xml stores a smaller size than the assigned tile, Hyprland expands
-    # the window at map time before WPF attaches its swapchain, clipping the canvas.
-    # Initializing Window.xml to the monitor's usable size before a fresh launch
-    # makes Hyprland shrink rather than expand the initial surface.
-    if [ "$FRESH_LAUNCH" = "1" ] && [ -f "$WIN_XML" ]; then
-        MON_SIZE="$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0]) | "\(((.width / .scale) - ((.reserved[0] // 0) + (.reserved[2] // 0))) | floor) \(((.height / .scale) - ((.reserved[1] // 0) + (.reserved[3] // 0))) | floor)"' 2>/dev/null || true)"
-        if [ -n "$MON_SIZE" ]; then
-            read -r MW MH <<< "$MON_SIZE"
-            if [ "${MW:-0}" -ge 800 ] && [ "${MH:-0}" -ge 600 ]; then
-                python3 - "$WIN_XML" "$MW" "$MH" <<'PYEOF' 2>/dev/null || true
+    if command -v jq >/dev/null 2>&1; then
+        # Sync XWayland keyboard layout with Hyprland's active layout so AltGr diacritics work reliably.
+        if command -v setxkbmap >/dev/null 2>&1; then
+            HYPR_KB_LAYOUT="$(hyprctl devices -j 2>/dev/null | jq -r '([.keyboards[] | select(.main == true)][0] // .keyboards[0]) | .layout // empty' 2>/dev/null | cut -d',' -f1 || true)"
+            if [ -n "$HYPR_KB_LAYOUT" ]; then
+                X11_KB_LAYOUT="$(DISPLAY="$DISPLAY" setxkbmap -query 2>/dev/null | awk '/^layout:/{print $2}' || true)"
+                if [ "${X11_KB_LAYOUT%%,*}" != "$HYPR_KB_LAYOUT" ]; then
+                    DISPLAY="$DISPLAY" setxkbmap "$HYPR_KB_LAYOUT" >/dev/null 2>&1 || true
+                fi
+            fi
+        fi
+
+        # Clean up stale windowless Photo.exe processes left behind after closing the window.
+        STALE_PIDS="$(pgrep -f 'Affinity/Photo 2/Phot[o]\.exe' 2>/dev/null || true)"
+        if [ -n "$STALE_PIDS" ]; then
+            MAPPED_COUNT="$(hyprctl clients -j 2>/dev/null | jq '[.[] | select((.class | test("^photo\\.exe$"; "i")) and .mapped == true)] | length' 2>/dev/null || echo 1)"
+            if [ "$MAPPED_COUNT" = "0" ]; then
+                ALL_OLD=1
+                for pid in $STALE_PIDS; do
+                    ETIMES="$(ps -o etimes= -p "$pid" 2>/dev/null | tr -d ' ' || echo 0)"
+                    if [ "${ETIMES:-0}" -lt 15 ]; then
+                        ALL_OLD=0
+                    fi
+                done
+                if [ "$ALL_OLD" = "1" ]; then
+                    for pid in $STALE_PIDS; do
+                        kill "$pid" 2>/dev/null || true
+                    done
+                    sleep 1
+                    for pid in $STALE_PIDS; do
+                        kill -9 "$pid" 2>/dev/null || true
+                    done
+                    "$WINESERVER" -k 2>/dev/null || true
+                    sleep 1
+                fi
+            else
+                FRESH_LAUNCH=0
+            fi
+        fi
+
+        # Prevent Hyprland tiling viewport clipping on startup:
+        # If Window.xml stores a smaller size than the assigned tile, Hyprland expands
+        # the window at map time before WPF attaches its swapchain, clipping the canvas.
+        # Initializing Window.xml to the monitor's usable size before a fresh launch
+        # makes Hyprland shrink rather than expand the initial surface.
+        if [ "$FRESH_LAUNCH" = "1" ] && [ -f "$WIN_XML" ] && command -v python3 >/dev/null 2>&1; then
+            MON_SIZE="$(hyprctl monitors -j 2>/dev/null | jq -r '([.[] | select(.focused == true)][0] // .[0]) | "\(((.width / .scale) - ((.reserved[0] // 0) + (.reserved[2] // 0))) | floor) \(((.height / .scale) - ((.reserved[1] // 0) + (.reserved[3] // 0))) | floor)"' 2>/dev/null || true)"
+            if [ -n "$MON_SIZE" ]; then
+                read -r MW MH <<< "$MON_SIZE"
+                if [ "${MW:-0}" -ge 800 ] && [ "${MH:-0}" -ge 600 ]; then
+                    python3 - "$WIN_XML" "$MW" "$MH" <<'PYEOF' 2>/dev/null || true
 import re, sys
 from pathlib import Path
 
@@ -138,6 +155,7 @@ new_txt = re.sub(
 if new_txt != txt:
     p.write_text(new_txt, encoding="utf-8")
 PYEOF
+                fi
             fi
         fi
     fi
@@ -146,9 +164,9 @@ fi
 # Ensure Affinity hot write directories use NOCOW on Btrfs (no-op on ext4 or xfs)
 if [ "$FRESH_LAUNCH" = "1" ]; then
     for d in \
-        "$PREFIX/drive_c/users/${USER}/AppData/Roaming/Affinity/Photo/2.0/temp" \
-        "$PREFIX/drive_c/users/${USER}/AppData/Roaming/Affinity/Photo/2.0/autosave" \
-        "$PREFIX/drive_c/users/${USER}/AppData/Roaming/Affinity/Common/2.0/clipboard"; do
+        "$PREFIX/drive_c/users/${WINE_USER}/AppData/Roaming/Affinity/Photo/2.0/temp" \
+        "$PREFIX/drive_c/users/${WINE_USER}/AppData/Roaming/Affinity/Photo/2.0/autosave" \
+        "$PREFIX/drive_c/users/${WINE_USER}/AppData/Roaming/Affinity/Common/2.0/clipboard"; do
         if [ -d "$d" ]; then
             chattr +C "$d" 2>/dev/null || true
         fi
@@ -202,5 +220,83 @@ for arg in "$@"; do
             ;;
     esac
 done
+
+# Re-apply runtime Hyprland rules after config reloads or theme switches
+# (such as hyprctl reload or dotfiles sync timers) until Photo.exe exits.
+if [ "$HYPR_EVAL_OK" = "1" ] && [ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ] && command -v python3 >/dev/null 2>&1; then
+    HYPR_SOCK="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/hypr/${HYPRLAND_INSTANCE_SIGNATURE}/.socket2.sock"
+    HYPR_WATCHER_LOCK="$PREFIX/.cache/hypr-watcher.lock"
+    if [ -S "$HYPR_SOCK" ]; then
+        mkdir -p "$PREFIX/.cache"
+        python3 - "$HYPR_SOCK" "$HYPR_RULES_LUA" "$HYPR_WATCHER_LOCK" </dev/null >/dev/null 2>&1 <<'PYEOF' &
+import fcntl, os, socket, subprocess, sys, time
+
+sock_path, rules_lua, lock_path = sys.argv[1:4]
+needle_exe = "Affinity/Photo 2/Photo.exe"
+
+try:
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except OSError:
+    sys.exit(0)
+
+def photo_running():
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as f:
+                cmd = f.read().decode("utf-8", "ignore").replace("\\", "/")
+            if needle_exe in cmd:
+                return True
+        except OSError:
+            continue
+    return False
+
+try:
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(sock_path)
+    sock.settimeout(3.0)
+except OSError:
+    sys.exit(0)
+
+start = time.monotonic()
+seen_photo = False
+buf = ""
+try:
+    while True:
+        running = photo_running()
+        if running:
+            seen_photo = True
+        elif seen_photo or (time.monotonic() - start) > 30.0:
+            break
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            continue
+        except OSError:
+            break
+        if not chunk:
+            break
+        buf += chunk.decode("utf-8", "ignore")
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            if line.startswith("configreloaded>>"):
+                time.sleep(0.2)
+                if photo_running():
+                    subprocess.run(
+                        ["hyprctl", "eval", rules_lua],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+finally:
+    sock.close()
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+PYEOF
+    fi
+fi
 
 exec "$WINE" "$APP_EXE" "${args[@]}"

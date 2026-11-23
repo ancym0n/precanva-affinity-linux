@@ -20,7 +20,7 @@ Run the installer script and point it at your downloaded `.exe`:
 ./apps/affinity-photo-2/2.6.5/install.sh ~/Downloads/affinity-photo-msi-2.6.5.exe
 ```
 
-This sets up a dedicated Wine prefix at `~/.AffinityPhoto2`, installs the tested ElementalWarrior Wine `11.22-r2` build and `vkd3d-proton 3.1` from GitHub Releases, configures `.NET 4.8` and WinRT metadata, extracts and installs the embedded MSI silently, and registers the launcher and `.afphoto` file association.
+This sets up a dedicated Wine prefix at `~/.AffinityPhoto2`, installs the tested ElementalWarrior Wine `11.22-r2` build and `vkd3d-proton 3.1` from GitHub Releases, configures `.NET 4.8` and WinRT metadata, extracts and installs the embedded MSI silently, seeds default performance preferences on fresh installs, and registers the launcher and `.afphoto` file association.
 
 Optional environment variables:
 
@@ -39,3 +39,4 @@ USE_LATEST_RELEASES=1 ./apps/affinity-photo-2/2.6.5/install.sh ~/Downloads/affin
    ```bash
    AFFINITY_OPENCL=1 affinity-photo-2
    ```
+4. On Hyprland, the launcher keeps `Photo.exe` opaque across config reloads and theme switches, centers GTK file chooser dialogs, and syncs the XWayland keyboard layout with your active Hyprland layout.

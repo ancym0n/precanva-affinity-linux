@@ -100,10 +100,11 @@ if [ ! -f "$APP_DIR/Photo.exe" ]; then
     exit 1
 fi
 
-log_step "Configuring vkd3d-proton and cleaning WinMetadata"
+log_step "Configuring vkd3d-proton, performance defaults, and cleaning WinMetadata"
 cp -f "$PREFIX/vkd3d_dlls/d3d12.dll" "$APP_DIR/d3d12.dll"
 cp -f "$PREFIX/vkd3d_dlls/d3d12core.dll" "$APP_DIR/d3d12core.dll"
 clear_shadowing_winmds "$PREFIX"
+seed_affinity_performance_prefs "$PREFIX" "Photo/2.0"
 rm -rf "$WORK_DIR"
 
 log_step "Installing launcher, icon, desktop entry, and file associations"

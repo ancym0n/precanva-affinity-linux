@@ -452,3 +452,72 @@ clear_shadowing_winmds() {
         done
     done
 }
+
+seed_affinity_performance_prefs() {
+    local prefix="$1"
+    local app_subdir="$2"
+    local wine_user="${USER:-$(id -un)}"
+    local app_root="$prefix/drive_c/users/${wine_user}/AppData/Roaming/Affinity/${app_subdir}"
+    local settings_dir="$app_root/Settings"
+    local prefs_file="$settings_dir/PerformancePreferences.xml"
+
+    # Pre-create hot write folders and apply Btrfs NOCOW where supported
+    mkdir -p "$settings_dir" \
+             "$app_root/temp" \
+             "$app_root/autosave" \
+             "$prefix/drive_c/users/${wine_user}/AppData/Roaming/Affinity/Common/2.0/clipboard"
+    chattr +C "$app_root/temp" \
+              "$app_root/autosave" \
+              "$prefix/drive_c/users/${wine_user}/AppData/Roaming/Affinity/Common/2.0/clipboard" \
+              2>/dev/null || true
+
+    # Never overwrite an existing user configuration
+    if [ -f "$prefs_file" ]; then
+        log_info "Keeping existing PerformancePreferences.xml"
+        return 0
+    fi
+
+    local ram_limit_mb="8192"
+    if [ -r /proc/meminfo ]; then
+        local calc_mb
+        calc_mb="$(awk '/^MemTotal:/ { printf "%d\n", int(($2 / 1024) * 0.75) }' /proc/meminfo 2>/dev/null || true)"
+        if [ -n "$calc_mb" ] && [ "$calc_mb" -ge 2048 ] 2>/dev/null; then
+            ram_limit_mb="$calc_mb"
+        fi
+    fi
+
+    python3 - "$prefs_file" "$ram_limit_mb" <<'PYEOF'
+import sys
+from pathlib import Path
+
+prefs_path = Path(sys.argv[1])
+ram_mb = sys.argv[2]
+xml = (
+    '<?xml version="1.0" encoding="utf-8"?>\r\n'
+    '<Settings xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
+    'xmlns:xsd="http://www.w3.org/2001/XMLSchema" '
+    'xsi:type="Serif.Interop.Persona.Settings.PerformanceSettings">\r\n'
+    '\t<RAMUsageLimit>\r\n'
+    '\t\t<UnitType>Megabyte</UnitType>\r\n'
+    f'\t\t<Value>{ram_mb}</Value>\r\n'
+    '\t</RAMUsageLimit>\r\n'
+    '\t<DiskWarningLimit>\r\n'
+    '\t\t<UnitType>Megabyte</UnitType>\r\n'
+    '\t\t<Value>32768</Value>\r\n'
+    '\t</DiskWarningLimit>\r\n'
+    '\t<UndoLimit>1024</UndoLimit>\r\n'
+    '\t<ViewQuality>0</ViewQuality>\r\n'
+    '\t<AutoSaveInterval>\r\n'
+    '\t\t<UnitType>Number</UnitType>\r\n'
+    '\t\t<Value>300</Value>\r\n'
+    '\t</AutoSaveInterval>\r\n'
+    '\t<UsePerfectClipping>False</UsePerfectClipping>\r\n'
+    '\t<UseDithering>True</UseDithering>\r\n'
+    '\t<RetinaPassIndex>0</RetinaPassIndex>\r\n'
+    '\t<UseHardwareAcceleration2>False</UseHardwareAcceleration2>\r\n'
+    '</Settings>'
+)
+prefs_path.write_bytes(xml.encode("utf-8"))
+PYEOF
+    log_info "Seeded default PerformancePreferences.xml (RAMUsageLimit=${ram_limit_mb} MiB, UseDithering=True, OpenCL=False)"
+}
